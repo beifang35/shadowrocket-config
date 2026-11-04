@@ -11,23 +11,35 @@
 
 ## 订阅地址
 
-**主用 jsDelivr `@latest`（国内可直连，已验证）**：
+**① GitHub Pages（推荐，push 后 1–2 分钟生效）**
+
+```
+https://beifang35.github.io/shadowrocket-config/shadowrocket.conf
+```
+
+> 需要仓库 Settings → Pages → Source 选 `Deploy from a branch` → `main` / `(root)` → Save。
+> 首次启用约 1 分钟。
+
+**② jsDelivr（国内可直接访问，但分支引用缓存 12 小时）**
 
 ```
 https://cdn.jsdelivr.net/gh/beifang35/shadowrocket-config@latest/shadowrocket.conf
 ```
 
-**备用 raw（需能访问 GitHub，CDN 有几小时缓存延迟）**：
+> `@latest` 指向最新 tag，通常比 `@main` 快，但仍有标签解析延迟。
+> 拉不到新版时先 purge：`https://purge.jsdelivr.net/gh/beifang35/shadowrocket-config@latest/shadowrocket.conf`
+
+**③ 具体版本（立即可用，适合临时验证）**
+
+```
+https://cdn.jsdelivr.net/gh/beifang35/shadowrocket-config@v1.0.5/shadowrocket.conf
+```
+
+**④ raw（需能访问 GitHub）**
 
 ```
 https://raw.githubusercontent.com/beifang35/shadowrocket-config/main/shadowrocket.conf
 ```
-
-> ⚠️ **不要用 `@main`**。jsDelivr 对分支引用缓存 12 小时，改了也拉不到新版。
-> `@latest` 指向最新 tag，每次发布都会打新 tag，能立刻解析到新内容。
->
-> 如果 `@latest` 拉到的还是旧版本，访问一次下面的地址强制刷缓存：
-> `https://purge.jsdelivr.net/gh/beifang35/shadowrocket-config@latest/shadowrocket.conf`
 
 ### 使用方法
 

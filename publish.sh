@@ -71,7 +71,21 @@ for ref in latest main "v${NEXT:-1.0.0}"; do
     && echo "    已清 @${ref}" || echo "    清 @${ref} 失败（不影响 raw，重启后自然过期）"
 done
 
+# GitHub Pages：push 到 main 后自动重建，1-2 分钟生效，没有 jsDelivr 那套 12 小时分支缓存
+echo ""
+echo "==> 触发 GitHub Pages 检查"
+code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 20 \
+  "https://beifang35.github.io/shadowrocket-config/shadowrocket.conf" 2>/dev/null || echo "000")
+if [ "$code" = "200" ]; then
+  echo "    Pages 在线（HTTP 200），1-2 分钟后自动更新"
+else
+  echo "    Pages 未启用或未就绪（HTTP $code）"
+  echo "    启用方法：仓库 Settings -> Pages -> Source 选 Deploy from a branch -> main / (root) -> Save"
+fi
+
 echo ""
 echo "完成。"
-echo "  订阅地址 https://cdn.jsdelivr.net/gh/beifang35/shadowrocket-config@latest/shadowrocket.conf"
+echo "  Pages（推荐，更新快）：https://beifang35.github.io/shadowrocket-config/shadowrocket.conf"
+echo "  jsDelivr（国内可达）： https://cdn.jsdelivr.net/gh/beifang35/shadowrocket-config@latest/shadowrocket.conf"
+echo "  raw（需代理）：       https://raw.githubusercontent.com/beifang35/shadowrocket-config/main/shadowrocket.conf"
 echo "  小火箭里长按配置 -> 更新配置 即可拉到新版。"
