@@ -315,7 +315,9 @@ def build():
     body = []
     body.append("# " + "=" * 66)
     body.append("# Shadowrocket 合并配置（自动生成，勿手改）")
-    body.append(f"# 生成时间 : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    body.append(f"# 上游指纹 : A={hashlib.sha1(texts['A'].encode()).hexdigest()[:12]}"
+                f"  B={hashlib.sha1(texts['B'].encode()).hexdigest()[:12]}")
+    body.append("# 说明     : 上游不变则本文件逐字节不变，便于 git 判断是否需要发布")
     body.append(f"# 来源 A   : {SOURCES['A']['name']}")
     body.append(f"#            {urls['A']}")
     body.append(f"# 来源 B   : {SOURCES['B']['name']}")
