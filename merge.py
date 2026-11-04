@@ -323,7 +323,28 @@ def build():
     # 原来用的 h2y 2021 版只有 1.6 万条，实测比用户旧配置少了 4.4 万条广告规则，
     # 这就是「配置变小了」的真正原因。
     # 交叉验证：对 10.9 万个国内常用域名，一线站点命中 0 个。
-    put(25, "RULE-SET,https://anti-ad.net/surge.txt,REJECT")
+    #
+    # 这里选择【内联】而不是 RULE-SET 引用：
+    # 小火箭把 RULE-SET 下载到 Library/Caches/rule-set-*.tmp，不写进主数据库，
+    # 界面上「规则数」始终只显示内联条数（16743），看起来像没生效。
+    # 内联后主库会真实增长到 11 万+ 条，和旧配置一样可见、可核对。
+    try:
+        anti_raw = fetch("https://anti-ad.net/surge.txt")
+        anti_n = 0
+        for ln in anti_raw.splitlines():
+            t = ln.strip()
+            if not t or t.startswith("#") or t.startswith("!"):
+                continue
+            q = [x.strip() for x in t.split(",")]
+            if q[0].upper() == "DOMAIN-SUFFIX" and len(q) > 1:
+                put(25, f"DOMAIN-SUFFIX,{q[1]},REJECT")
+                anti_n += 1
+        say(f"[内联] anti-AD {anti_n} 条广告域名")
+        if anti_n < 50000:
+            raise RuntimeError(f"anti-AD 条数异常（{anti_n}）")
+    except Exception as e:                                    # noqa: BLE001
+        say(f"[警告] anti-AD 内联失败，回退为远程规则集：{e}")
+        put(25, "RULE-SET,https://anti-ad.net/surge.txt,REJECT")
     for r in a_direct:
         put(60, r)
     for r in a_proxy:
@@ -426,7 +447,8 @@ def build():
           and l.split(",")[1] in FORCE_PROXY]
     check(len(fp) == len(FORCE_PROXY), f"强制代理覆盖层完整（{len(fp)}/{len(FORCE_PROXY)}）")
 
-    check(any("anti-ad.net" in l for l in rule_lines), "anti-AD 广告规则集已挂载")
+    anti_cnt = sum(1 for l in rule_lines if l.endswith(",REJECT"))
+    check(anti_cnt >= 60000, f"广告拦截规则覆盖充分（{anti_cnt} 条 REJECT）")
 
     raw_refs = [l for l in rule_lines if "raw.githubusercontent.com" in l]
     check(not raw_refs, f"规则集全部走 jsDelivr（残留 raw 引用 {len(raw_refs)} 条）")
@@ -435,7 +457,7 @@ def build():
             if re.match(r"^(IP-CIDR6?|GEOIP),", l, re.I) and "no-resolve" not in l.lower()]
     check(not nude, f"所有 IP 类规则都带 no-resolve（裸规则 {len(nude)} 条）")
 
-    check(len(rule_lines) > 10000, f"总规则数合理（{len(rule_lines)}）")
+    check(len(rule_lines) > 100000, f"总规则数合理（{len(rule_lines)}）")
 
     say("")
     say(f"[结果] {'通过' if ok else '不通过 —— 保留旧文件，不覆盖'}")
