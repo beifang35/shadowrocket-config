@@ -93,6 +93,17 @@ always-reject-url-rewrite = false
 udp-policy-not-supported-behaviour = REJECT
 block-quic = all-proxy"""
 
+# 强制放行的域名（优先级最高，压过所有广告拦截）
+# ---------------------------------------------------------------
+# anti-AD 把一些厂商的整站标成广告，但其中部分是用户会主动访问的正常站点。
+# 加在这里的域名会插到 [Rule] 最前面，直接 DIRECT，不再被 REJECT 吃掉。
+#
+# 2345.com：上海二三四五，anti-AD 因捆绑推广/主页劫持把整域列入；
+#           但它是正常导航站，用户主动访问时应放行。
+EXEMPT = [
+    "2345.com",
+]
+
 # 强制走代理的域名
 # ---------------------------------------------------------------
 # A 的 2021 年白名单把下面这些判成「境外可直连」，但这个判断已经过时：
@@ -357,6 +368,10 @@ def build():
     for d in FORCE_PROXY:
         put(15, f"DOMAIN-SUFFIX,{d},PROXY")
 
+    # 放行名单：必须最先匹配，否则会被后面的广告规则 REJECT 掉
+    for d in EXEMPT:
+        put(5, f"DOMAIN-SUFFIX,{d},DIRECT")
+
     put(900, "GEOIP,CN,DIRECT,no-resolve")
     put(999, "FINAL,PROXY")
 
@@ -398,6 +413,7 @@ def build():
             25: "anti-AD 国内 App 埋点/广告（10 万+ 条）",
             60: "A 的直连白名单",
             65: "A 的强制代理名单",
+            5: "放行名单（压过所有广告拦截）",
             15: "强制代理覆盖层（A 的白名单里已过时的境外站点）",
             105: "A 的 IP 段（统一补 no-resolve）",
             900: "GeoIP 兜底（no-resolve 不可删）",
@@ -442,6 +458,12 @@ def build():
           "没有 dns-server = system")
     check(any(l.startswith("dns-server") and "https://" in l for l in active), "DNS 走加密 DoH")
     check(any(l.startswith("proxy-dns-server") for l in active), "节点域名单独走加密 DNS")
+
+    ex = [l for l in rule_lines if l in {f"DOMAIN-SUFFIX,{d},DIRECT" for d in EXEMPT}]
+    check(len(ex) == len(EXEMPT), f"放行名单已挂载（{len(ex)}/{len(EXEMPT)}）")
+    if EXEMPT:
+        first = next((i for i, l in enumerate(rule_lines) if l in set(ex)), 999)
+        check(first <= 3, f"放行名单位于规则链最前（第 {first+1} 条）")
 
     fp = [l for l in rule_lines if l.startswith("DOMAIN-SUFFIX,") and l.endswith(",PROXY")
           and l.split(",")[1] in FORCE_PROXY]
