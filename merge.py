@@ -188,6 +188,17 @@ def dedupe(seq):
     return out
 
 
+def to_jsdelivr(url: str) -> str:
+    """raw.githubusercontent.com -> cdn.jsdelivr.net
+    国内直连 raw 经常超时；规则集拉不下来的话小火箭会退化成「全部走代理」。
+    这不是可选项，是可用性前提。"""
+    m = re.match(r"^https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$", url)
+    if not m:
+        return url
+    owner, repo, branch, path = m.groups()
+    return f"https://cdn.jsdelivr.net/gh/{owner}/{repo}@{branch}/{path}"
+
+
 def normalize_rewrite(lines) -> list[str]:
     """URL Rewrite 统一处理：
     - 强制降到 http 匹配（https 的重写要开 MITM 解密才生效，写了也是误导）
@@ -275,7 +286,7 @@ def build():
     for frag, pos, _desc in B_RULESET_ORDER:
         if frag in b_ruleset:
             url, policy = b_ruleset[frag]
-            put(pos, f"RULE-SET,{url},{policy}")
+            put(pos, f"RULE-SET,{to_jsdelivr(url)},{policy}")
 
     for r in a_reject:
         put(20, r)          # A 的 1.6 万条广告，紧跟 Apple 直连之后
@@ -367,6 +378,9 @@ def build():
           "没有 dns-server = system")
     check(any(l.startswith("dns-server") and "https://" in l for l in active), "DNS 走加密 DoH")
     check(any(l.startswith("proxy-dns-server") for l in active), "节点域名单独走加密 DNS")
+
+    raw_refs = [l for l in rule_lines if "raw.githubusercontent.com" in l]
+    check(not raw_refs, f"规则集全部走 jsDelivr（残留 raw 引用 {len(raw_refs)} 条）")
 
     nude = [l for l in rule_lines
             if re.match(r"^(IP-CIDR6?|GEOIP),", l, re.I) and "no-resolve" not in l.lower()]
