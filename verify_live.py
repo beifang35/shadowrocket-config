@@ -325,6 +325,9 @@ def main():
         "umeng.com", "cnzz.com", "popads.net", "adjust.com", "app.adjust.com",
         "adservice.google.com", "pglstatp-toutiao.com", "xdcs-collector.ximalaya.com",
         "besc.baidustatic.com", "dup.baidustatic.com", "2345.com",
+        "iadsdk.apple.com", "api-adservices.apple.com", "metrics.icloud.com",
+        "stun.l.google.com", "stun.cloudflare.com", "aax-eu.amazon.com",
+        "pagead2.googlevideo.com", "coinhive-proxy.com", "pixel.mailchimp.com",
     ]
     bad = [d for d in classic if m.match(d)[0] not in REJECT_SET]
     print(f"  经典广告域名 {len(classic)} 条 → 未拦截 {len(bad)} 条", end="")

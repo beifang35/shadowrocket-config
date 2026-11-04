@@ -140,6 +140,52 @@ UNBREAK_DIRECT = [
     "DOMAIN,nishub1.10010.com,DIRECT",
 ]
 
+# Apple 列表（pos 10）之前的 Apple 自家广告与隐私遥测拦截（pos 9）
+# 原因：ACL4SSR Apple.list 含 DOMAIN-SUFFIX,apple.com / icloud.com / mzstatic.com,DIRECT，
+# 若不前置拦截，iAd 广告 SDK 与 Apple 统计遥测会被 Apple.list 提前放行。
+APPLE_TELEMETRY_REJECT = [
+    "crashlytics.com",
+    "iadsdk.apple.com",
+    "api-adservices.apple.com",
+    "metrics.icloud.com",
+    "metrics.mzstatic.com",
+    "books-analytics-events.apple.com",
+    "weather-analytics-events.apple.com",
+    "notes-analytics-events.apple.com",
+    "xp.apple.com",
+    "supportmetrics.apple.com",
+]
+
+# WebRTC STUN 公网 IP 探测服务器拦截（pos 9，防止 WebRTC 穿透暴露公网或节点 IP）
+WEBRTC_STUN_REJECT = [
+    "stun.l.google.com",
+    "stun1.l.google.com",
+    "stun2.l.google.com",
+    "stun3.l.google.com",
+    "stun4.l.google.com",
+    "stun.cloudflare.com",
+    "stun.services.mozilla.com",
+    "global.stun.twilio.com",
+    "stun.ekiga.net",
+    "stun.ideasip.com",
+    "stun.schlund.de",
+    "stun.voiparound.com",
+    "stun.voipbuster.com",
+    "stun.voipstunt.com",
+    "stun.xten.com",
+    "stun.qq.com",
+    "stun.miwifi.com",
+    "stun.chat.bilibili.com",
+    "stun.nextcloud.com",
+    "stun.freeswitch.org",
+    "stun.sipgate.net",
+    "stun.stunprotocol.org",
+    "stun.callwithus.com",
+    "stun.counterpath.com",
+    "stun.1und1.de",
+    "stun.gmx.net",
+]
+
 # 在 UnBan.list (pos 12) 和 ChinaDirect.list (pos 13) 之前保持拦截或代理的特例（pos 11）
 PRE_UNBAN_OVERRIDES = [
     "DOMAIN,dl.google.com,PROXY",
@@ -152,9 +198,83 @@ PRE_UNBAN_OVERRIDES = [
     "DOMAIN-SUFFIX,beizi.biz,REJECT",
 ]
 
-# 额外拦截：Loyalsoldier 未收录、但用户要求保持拦截的域名
+# 额外拦截：Loyalsoldier / anti-AD 未收录的海外广告、追踪、挖矿、遥测、邮件追踪像素及用户指定拦截项（pos 26）
+# 注：严格排除 apis.google.com / t.co / redditmedia.com / vimeocdn.com / mailchimp.com 主站等正常业务域名
 EXTRA_REJECT = [
     "2345.com",
+    # Amazon / Google / 视频广告子域
+    "aax-eu.amazon.com",
+    "device-metrics-us.amazon.com",
+    "unagi-na.amazon.com",
+    "st-widget.s3.amazonaws.com",
+    "tagmanager.google.com",
+    "plus.google.com",
+    "pagead2.googlevideo.com",
+    "bcvp0rtal.com",
+    "api.bcovlive.io",
+    "ad.dm.gg",
+    "ads.dailymotion.com",
+    "video-ads.twitter.com",
+    # 统计分析 / 归因追踪 / 错误监控遥测
+    "metrika.yandex.com",
+    "pendo.io",
+    "app.link",
+    "bnc.lt",
+    "snap.licdn.com",
+    "cdn.ravenjs.com",
+    "raygun.io",
+    "honeybadger.io",
+    "trackjs.com",
+    # 网页加密货币挖矿（Cryptojacking）
+    "coinhive-proxy.com",
+    "coin-hive-proxy.com",
+    "cryptoloot.org",
+    "minero-proxy.com",
+    "hashforcash.us",
+    "fastpool.xyz",
+    "minergate.com",
+    "cpu.js.org",
+    # OEM 系统与浏览器广告遥测
+    "settings-win.data.microsoft.com",
+    "ads-mas-us.vivobrowser.com",
+    "ads-mas.vivobrowser.com",
+    # Cookie 追踪与同意管理弹窗（CMP）
+    "cookielaw.org",
+    "onetrust.com",
+    "onetrust.io",
+    "privacy-mgmt.com",
+    "wrapper-api.sp-prod.net",
+    "trustarc.com",
+    "didomi.io",
+    # 联盟营销与 A/B 测试追踪 SDK
+    "tqlkg.com",
+    "shrsl.com",
+    "impact.com",
+    "split.io",
+    "launchdarkly.com",
+    "vwo.com",
+    "abtest.ai",
+    "flagsmith.com",
+    "configcat.com",
+    # 邮件打开率/点击追踪像素子域（保留 mailchimp.com / sendgrid.net 等主站不拦）
+    "pixel.mailchimp.com",
+    "open.convertkit.com",
+    "customeriomail.com",
+    "email-open.dripemail2.com",
+    "t.sendinblue.com",
+    "prox.sendinblue.com",
+    "click.mailerlite.com",
+    "pixel.aweber.com",
+    "clicks.aweber.com",
+    "open.activecampaign.com",
+    "lt.activecampaign.com",
+    "lt.pardot.com",
+    "pi.pardot.com",
+    "click.em.pardot.com",
+    "email.mailgun.net",
+    "track.mailgun.org",
+    "track.constantcontact.com",
+    "t.hubspotemail.net",
 ]
 
 # 强制走代理的域名覆盖层（pos 55：位于所有广告规则 pos 20~50 之后、所有直连白名单 pos 60~90 之前）
@@ -413,8 +533,11 @@ def build():
     for r in UNBREAK_DIRECT:
         put(8, r)
 
-    # pos 9: 拦截 Apple.list 里的 crashlytics.com（既属于被墙域名又是崩溃统计 telemetry）
-    put(9, "DOMAIN-SUFFIX,crashlytics.com,REJECT")
+    # pos 9: Apple 广告/隐私遥测子域拦截 + WebRTC STUN 公网探测拦截（早于 pos 10 Apple.list）
+    for d in APPLE_TELEMETRY_REJECT:
+        put(9, f"DOMAIN-SUFFIX,{d},REJECT")
+    for d in WEBRTC_STUN_REJECT:
+        put(9, f"DOMAIN-SUFFIX,{d},REJECT")
 
     # B 的规则集（pos 10 Apple, pos 12 UnBan, pos 13 ChinaDirect, pos 14 LAN, pos 30~50 AD, pos 90~110 CN）
     for frag, pos, _desc in B_RULESET_ORDER:
@@ -473,7 +596,7 @@ def build():
     # pos 55: 强制代理层（FORCE_PROXY + Johnshall 的 Proxy 列表 + AppleNews 规则集）
     # 位于所有广告拦截（pos 20~50）之后：不会放跑 ads.linkedin.com / ads.google.com 等广告子域
     # 位于所有直连白名单（pos 60~90）之前：彻底压住过时的直连判断，保证被墙域名 100% 走代理
-    all_rejected = anti_set | legacy_reject_domains
+    all_rejected = anti_set | legacy_reject_domains | set(d.lower() for d in EXTRA_REJECT) | set(d.lower() for d in APPLE_TELEMETRY_REJECT) | set(d.lower() for d in WEBRTC_STUN_REJECT)
     proxy_suffix_set = set()
     for d in FORCE_PROXY:
         dl = d.lower()
@@ -552,12 +675,12 @@ def build():
             5: "放行名单（最高优先级，压过所有规则）",
             7: "百度联盟广告子域精确拦截（早于 baidustatic 主域放行）",
             8: "国内公共静态 CDN 与运营商一键登录防误杀保活",
-            9: "Apple 列表特例拦截（crashlytics）",
+            9: "Apple 隐私遥测拦截与 WebRTC STUN 防泄漏（早于 Apple.list）",
             11: "UnBan / ChinaDirect 前置覆盖规则",
             20: "A_LEGACY · EasyList 广告拦截（1.6 万条内联）",
             25: "广告域名集 1 · Loyalsoldier DOMAIN-SET（19.7 万条索引查找）",
-            26: "额外拦截（用户要求保持拦截的站点）",
-            27: "广告域名集 2 · anti-AD ∪ Johnshall DOMAIN-SET（10.2 万条索引查找，已清洗误杀）",
+            26: "额外拦截（海外广告/追踪/挖矿/遥测/邮件像素 + 2345）",
+            27: "广告域名集 2 · anti-AD ∪ Johnshall DOMAIN-SET（10.8 万条索引查找，已清洗误杀）",
             55: "强制代理层（GFWList 100% 兜底 + Johnshall 代理名单）",
             60: "A · Johnshall 直连白名单（已剔除被墙与代理域名）",
             105: "A · Johnshall IP 段（152 条统一补 no-resolve）",

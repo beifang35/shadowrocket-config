@@ -407,6 +407,15 @@ CASES = [
     ("ubmcmm.baidustatic.com",   "REJECT", "百度联盟广告子域"),
     ("2345.com",                 "REJECT", "2345 导航（用户要求拦截）"),
     ("crashlytics.com",          "REJECT", "Crashlytics 统计"),
+    ("iadsdk.apple.com",         "REJECT", "Apple iAd 广告 SDK"),
+    ("api-adservices.apple.com", "REJECT", "Apple AdServices 广告"),
+    ("metrics.icloud.com",       "REJECT", "Apple iCloud 遥测"),
+    ("stun.l.google.com",        "REJECT", "WebRTC STUN 防公网 IP 泄漏"),
+    ("stun.cloudflare.com",      "REJECT", "WebRTC STUN 防公网 IP 泄漏"),
+    ("aax-eu.amazon.com",        "REJECT", "Amazon 广告子域"),
+    ("pagead2.googlevideo.com",  "REJECT", "YouTube 视频广告"),
+    ("coinhive-proxy.com",       "REJECT", "网页挖矿脚本"),
+    ("pixel.mailchimp.com",      "REJECT", "邮件打开追踪像素"),
 
     # ---- 局域网 / 特殊 ----
     ("192.168.1.1",      DIRECT, "局域网 IP"),
