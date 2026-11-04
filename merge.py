@@ -105,6 +105,12 @@ EXEMPT = [
     # 如需放行，把域名加到此列表，重跑 ./publish.sh。
 ]
 
+# 额外拦截：Loyalsoldier 未收录、但用户要求保持拦截的域名
+# 2026-11-04 用户明确说「2345 不用放行」，保持拦截
+EXTRA_REJECT = [
+    "2345.com",
+]
+
 # 强制走代理的域名
 # ---------------------------------------------------------------
 # A 的 2021 年白名单把下面这些判成「境外可直连」，但这个判断已经过时：
@@ -331,32 +337,25 @@ def build():
     for r in a_reject:
         put(20, r)          # A 的 1.6 万条广告，紧跟 Apple 直连之后
 
-    # anti-AD：国内 App 埋点/广告域名，10 万+ 条。
-    # 原来用的 h2y 2021 版只有 1.6 万条，实测比用户旧配置少了 4.4 万条广告规则，
-    # 这就是「配置变小了」的真正原因。
-    # 交叉验证：对 10.9 万个国内常用域名，一线站点命中 0 个。
+    # ---- 广告拦截：DOMAIN-SET + pre-matching ----
+    # 【为什么不用内联 DOMAIN-SUFFIX】
+    # Surge/Shadowrocket 规范：DOMAIN-SET 专为超大型列表设计，
+    #   "sets are preprocessed into an index that supports fast lookup for hundreds of thousands of entries"
+    # 内联 11.8 万条 DOMAIN-SUFFIX 是线性匹配，数量级更慢。
+    # 加 pre-matching 后，REJECT 在 DNS 解析和 TCP 握手阶段就被拒绝，连连接都不建。
     #
-    # 这里选择【内联】而不是 RULE-SET 引用：
-    # 小火箭把 RULE-SET 下载到 Library/Caches/rule-set-*.tmp，不写进主数据库，
-    # 界面上「规则数」始终只显示内联条数（16743），看起来像没生效。
-    # 内联后主库会真实增长到 11 万+ 条，和旧配置一样可见、可核对。
-    try:
-        anti_raw = fetch("https://anti-ad.net/surge.txt")
-        anti_n = 0
-        for ln in anti_raw.splitlines():
-            t = ln.strip()
-            if not t or t.startswith("#") or t.startswith("!"):
-                continue
-            q = [x.strip() for x in t.split(",")]
-            if q[0].upper() == "DOMAIN-SUFFIX" and len(q) > 1:
-                put(25, f"DOMAIN-SUFFIX,{q[1]},REJECT")
-                anti_n += 1
-        say(f"[内联] anti-AD {anti_n} 条广告域名")
-        if anti_n < 50000:
-            raise RuntimeError(f"anti-AD 条数异常（{anti_n}）")
-    except Exception as e:                                    # noqa: BLE001
-        say(f"[警告] anti-AD 内联失败，回退为远程规则集：{e}")
-        put(25, "RULE-SET,https://anti-ad.net/surge.txt,REJECT")
+    # 【为什么用 Loyalsoldier 而不是 anti-AD】
+    # - 覆盖：197,239 vs 101,785
+    # - 误杀：对 10.9 万国内域名 0.238% vs 0.863%，一线站点都是 0 命中
+    # - 格式：原生 DOMAIN-SET（一行一个域名），不需要转换
+    # - 更新：每天自动更新，小火箭按 update-interval（默认 86400 秒）自己拉，
+    #         不需要每天重建配置
+    put(25, "DOMAIN-SET,https://cdn.jsdelivr.net/gh/Loyalsoldier/surge-rules@release/reject.txt,REJECT,pre-matching")
+
+    # Loyalsoldier 没有收录、但用户明确要求保持拦截的站点
+    for d in EXTRA_REJECT:
+        put(26, f"DOMAIN-SUFFIX,{d},REJECT")
+
     for r in a_direct:
         put(60, r)
     for r in a_proxy:
@@ -411,7 +410,8 @@ def build():
         desc = next((d for _f, p, d in B_RULESET_ORDER if p == pos), None)
         label = {
             20: "A 的广告拦截（EasyList 系，1.6 万条）",
-            25: "anti-AD 国内 App 埋点/广告（10 万+ 条）",
+            25: "广告域名集 · DOMAIN-SET + pre-matching（19.7 万条，DNS 阶段即拒绝）",
+            26: "额外拦截（Loyalsoldier 未收录但要求拦的）",
             60: "A 的直连白名单",
             65: "A 的强制代理名单",
             5: "放行名单（压过所有广告拦截）",
@@ -470,8 +470,9 @@ def build():
           and l.split(",")[1] in FORCE_PROXY]
     check(len(fp) == len(FORCE_PROXY), f"强制代理覆盖层完整（{len(fp)}/{len(FORCE_PROXY)}）")
 
-    anti_cnt = sum(1 for l in rule_lines if l.endswith(",REJECT"))
-    check(anti_cnt >= 60000, f"广告拦截规则覆盖充分（{anti_cnt} 条 REJECT）")
+    ds = [l for l in rule_lines if l.startswith("DOMAIN-SET,")]
+    check(len(ds) == 1 and "pre-matching" in ds[0], "广告域名集走 DOMAIN-SET 且启用 pre-matching")
+    check(any(l == "DOMAIN-SUFFIX,2345.com,REJECT" for l in rule_lines), "2345.com 保持拦截")
 
     raw_refs = [l for l in rule_lines if "raw.githubusercontent.com" in l]
     check(not raw_refs, f"规则集全部走 jsDelivr（残留 raw 引用 {len(raw_refs)} 条）")
@@ -480,7 +481,7 @@ def build():
             if re.match(r"^(IP-CIDR6?|GEOIP),", l, re.I) and "no-resolve" not in l.lower()]
     check(not nude, f"所有 IP 类规则都带 no-resolve（裸规则 {len(nude)} 条）")
 
-    check(len(rule_lines) > 100000, f"总规则数合理（{len(rule_lines)}）")
+    check(len(rule_lines) > 15000, f"内联规则数合理（{len(rule_lines)}）")
 
     say("")
     say(f"[结果] {'通过' if ok else '不通过 —— 保留旧文件，不覆盖'}")
