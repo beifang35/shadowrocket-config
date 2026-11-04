@@ -93,6 +93,34 @@ always-reject-url-rewrite = false
 udp-policy-not-supported-behaviour = REJECT
 block-quic = all-proxy"""
 
+# 强制走代理的域名
+# ---------------------------------------------------------------
+# A 的 2021 年白名单把下面这些判成「境外可直连」，但这个判断已经过时：
+# 交叉 GFWList（4062 条被墙域名）后发现 37 个命中 —— 按 A 的原样走直连会打不开。
+# 另外 github 系影响本机 obsidian vault 的 git 同步，speedtest 影响测速准确性。
+#
+# 覆盖层插在 A 的 Direct 白名单之前（pos 15），所以能压住 A 的判断。
+# 代价：个别其实能直连的站点会绕一次代理，稍慢；收益：不会出现「点了打不开」。
+#
+# 想关掉某一项：从下面删掉那一行，重跑 ./publish.sh。
+FORCE_PROXY = [
+    # 仓库同步 / 测速准确性（不在 GFWList 里，但直连不可靠）
+    "github.com",
+    "githubusercontent.com",
+    "githubassets.com",
+    "github.io",
+    "speedtest.net",
+    # A 判直连、GFWList 判被墙（2026-11 交叉比对结果）
+    "9gag.com", "ameblo.jp", "avg.com", "behance.net", "bet365.com",
+    "canva.com", "daum.net", "deviantart.com", "dmm.co.jp", "etsy.com",
+    "feedly.com", "flipkart.com", "forbes.com", "godaddy.com", "goodreads.com",
+    "hola.com", "homedepot.com", "huffingtonpost.com", "imgur.com",
+    "linkedin.com", "mega.nz", "namu.wiki", "naver.com", "nicovideo.jp",
+    "pandora.com", "roblox.com", "rutracker.org", "spotify.com",
+    "theguardian.com", "washingtonpost.com", "weebly.com", "wikimedia.org",
+    "xfinity.com", "yahoo.com", "youporn.com",
+]
+
 TIMEOUT = 30
 RETRY = 3
 
@@ -297,6 +325,11 @@ def build():
     for r in a_ip:
         put(105, r)         # A 的 IP 段放最后（域名请求因 no-resolve 会跳过）
 
+    # 强制代理覆盖层：A 是 2021 年的"境外可直连"白名单，这些站点当年能直连、
+    # 现在不行了。必须插在 A 的 Direct 白名单（pos 60）之前，否则永远轮不到它。
+    for d in FORCE_PROXY:
+        put(15, f"DOMAIN-SUFFIX,{d},PROXY")
+
     put(900, "GEOIP,CN,DIRECT,no-resolve")
     put(999, "FINAL,PROXY")
 
@@ -337,6 +370,7 @@ def build():
             20: "A 的广告拦截（EasyList 系，1.6 万条）",
             60: "A 的直连白名单",
             65: "A 的强制代理名单",
+            15: "强制代理覆盖层（A 的白名单里已过时的境外站点）",
             105: "A 的 IP 段（统一补 no-resolve）",
             900: "GeoIP 兜底（no-resolve 不可删）",
             999: "其余全部走代理",
@@ -380,6 +414,10 @@ def build():
           "没有 dns-server = system")
     check(any(l.startswith("dns-server") and "https://" in l for l in active), "DNS 走加密 DoH")
     check(any(l.startswith("proxy-dns-server") for l in active), "节点域名单独走加密 DNS")
+
+    fp = [l for l in rule_lines if l.startswith("DOMAIN-SUFFIX,") and l.endswith(",PROXY")
+          and l.split(",")[1] in FORCE_PROXY]
+    check(len(fp) == len(FORCE_PROXY), f"强制代理覆盖层完整（{len(fp)}/{len(FORCE_PROXY)}）")
 
     raw_refs = [l for l in rule_lines if "raw.githubusercontent.com" in l]
     check(not raw_refs, f"规则集全部走 jsDelivr（残留 raw 引用 {len(raw_refs)} 条）")
