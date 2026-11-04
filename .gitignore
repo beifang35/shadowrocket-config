@@ -1,0 +1,4 @@
+out/
+*.tmp
+.DS_Store
+__pycache__/
