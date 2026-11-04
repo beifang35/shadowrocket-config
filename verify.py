@@ -108,7 +108,7 @@ def load_conf(path: Path):
                 k, v = s.split("=", 1)
                 general[k.strip()] = v.strip()
         elif mode == "Rule":
-            if s.upper().startswith("RULE-SET,"):
+            if s.upper().startswith(("RULE-SET,", "DOMAIN-SET,")):
                 rulesets.append(s)
             else:
                 r = parse_rule(s)
@@ -128,6 +128,27 @@ SUPPORTED_TYPES = {
 def expand_ruleset(line: str, stats: dict) -> list[Rule]:
     parts = [p.strip() for p in line.split(",")]
     url, policy = parts[1], parts[2].upper()
+
+    # DOMAIN-SET：一行一个域名，点开头 = 后缀匹配（Surge/Shadowrocket 规范）
+    if parts[0].upper() == "DOMAIN-SET":
+        try:
+            body = curl(url)
+        except Exception as e:                               # noqa: BLE001
+            stats.setdefault("failed", []).append((url, str(e)))
+            return []
+        out = []
+        for ln in body.splitlines():
+            t = ln.strip()
+            if not t or t.startswith("#"):
+                continue
+            if t.startswith("."):
+                out.append(Rule(t, "DOMAIN-SUFFIX", t[1:], policy, True, url.split("/")[-1]))
+            else:
+                out.append(Rule(t, "DOMAIN", t, policy, True, url.split("/")[-1]))
+        stats.setdefault("sets", []).append(
+            {"file": url.split("/")[-1], "count": len(out), "unsupported": [], "url": url})
+        return out
+
     try:
         body = curl(url)
     except Exception as e:                                   # noqa: BLE001
@@ -396,7 +417,7 @@ def main():
             continue
         if mode != "Rule" or not s or s.startswith("#"):
             continue
-        if s.upper().startswith("RULE-SET,"):
+        if s.upper().startswith(("RULE-SET,", "DOMAIN-SET,")):
             full.extend(cache.get(s, []))
         else:
             r = parse_rule(s)

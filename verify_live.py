@@ -43,6 +43,20 @@ def expand(rows):
     for rowid, name, value, option, ext in rows:
         if name == "COMMENT":
             continue
+        if name == "DOMAIN-SET":
+            body = curl(value)
+            n = 0
+            for ln in body.splitlines():
+                t = ln.strip()
+                if not t or t.startswith("#"):
+                    continue
+                if t.startswith("."):
+                    out.append(("DOMAIN-SUFFIX", t[1:], (option or "").upper(), True, "domain-set"))
+                else:
+                    out.append(("DOMAIN", t, (option or "").upper(), True, "domain-set"))
+                n += 1
+            print(f"    DOMAIN-SET {'domain-set':<22} {n:>6} 条")
+            continue
         if name == "RULE-SET":
             body = curl(value)
             n = 0
