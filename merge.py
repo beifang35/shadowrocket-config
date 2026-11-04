@@ -50,6 +50,7 @@ SOURCES = {
 
 BASE = Path(__file__).resolve().parent
 OUT_DIR = BASE / "out"
+RULES_DIR = BASE / "rules"
 MERGED = OUT_DIR / "shadowrocket.conf"
 REPORT = OUT_DIR / "merge-report.txt"
 
@@ -352,6 +353,26 @@ def build():
     #         不需要每天重建配置
     put(25, "DOMAIN-SET,https://cdn.jsdelivr.net/gh/Loyalsoldier/surge-rules@release/reject.txt,REJECT,pre-matching")
 
+    # 【第二个域名集】anti-AD 的独有部分
+    # 实测：Loyalsoldier 197,239 条 / anti-AD 101,785 条，交集 77,182。
+    # 换成 Loyalsoldier 会丢掉 24,603 条 anti-AD 独有的拦截（抽样 800 条漏 10 条）。
+    # 两个源互补，所以把 anti-AD 转成 DOMAIN-SET 格式后一起挂上，总计约 22 万条唯一域名。
+    anti_raw = fetch("https://anti-ad.net/surge.txt")
+    anti_domains = []
+    for ln in anti_raw.splitlines():
+        t = ln.strip()
+        if not t or t.startswith("#") or t.startswith("!"):
+            continue
+        q = [x.strip() for x in t.split(",")]
+        if q[0].upper() == "DOMAIN-SUFFIX" and len(q) > 1:
+            anti_domains.append("." + q[1])
+    if len(anti_domains) < 50000:
+        raise RuntimeError(f"anti-AD 条数异常（{len(anti_domains)}）")
+    RULES_DIR.mkdir(parents=True, exist_ok=True)
+    (RULES_DIR / "anti-ad.txt").write_text("\n".join(anti_domains) + "\n", encoding="utf-8")
+    say(f"[生成] rules/anti-ad.txt  {len(anti_domains)} 条（DOMAIN-SET 格式）")
+    put(27, "DOMAIN-SET,https://beifang35.github.io/shadowrocket-config/rules/anti-ad.txt,REJECT,pre-matching")
+
     # Loyalsoldier 没有收录、但用户明确要求保持拦截的站点
     for d in EXTRA_REJECT:
         put(26, f"DOMAIN-SUFFIX,{d},REJECT")
@@ -412,6 +433,7 @@ def build():
             20: "A 的广告拦截（EasyList 系，1.6 万条）",
             25: "广告域名集 · DOMAIN-SET + pre-matching（19.7 万条，DNS 阶段即拒绝）",
             26: "额外拦截（Loyalsoldier 未收录但要求拦的）",
+            27: "anti-AD 域名集 · DOMAIN-SET + pre-matching（补 Loyalsoldier 的缺口）",
             60: "A 的直连白名单",
             65: "A 的强制代理名单",
             5: "放行名单（压过所有广告拦截）",
@@ -471,7 +493,8 @@ def build():
     check(len(fp) == len(FORCE_PROXY), f"强制代理覆盖层完整（{len(fp)}/{len(FORCE_PROXY)}）")
 
     ds = [l for l in rule_lines if l.startswith("DOMAIN-SET,")]
-    check(len(ds) == 1 and "pre-matching" in ds[0], "广告域名集走 DOMAIN-SET 且启用 pre-matching")
+    check(len(ds) == 2, f"两个广告域名集并列（{len(ds)}/2）")
+    check(all("pre-matching" in l for l in ds), "两个域名集都启用 pre-matching")
     check(any(l == "DOMAIN-SUFFIX,2345.com,REJECT" for l in rule_lines), "2345.com 保持拦截")
 
     raw_refs = [l for l in rule_lines if "raw.githubusercontent.com" in l]
