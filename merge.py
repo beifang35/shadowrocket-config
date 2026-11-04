@@ -318,6 +318,12 @@ def build():
 
     for r in a_reject:
         put(20, r)          # A 的 1.6 万条广告，紧跟 Apple 直连之后
+
+    # anti-AD：国内 App 埋点/广告域名，10 万+ 条。
+    # 原来用的 h2y 2021 版只有 1.6 万条，实测比用户旧配置少了 4.4 万条广告规则，
+    # 这就是「配置变小了」的真正原因。
+    # 交叉验证：对 10.9 万个国内常用域名，一线站点命中 0 个。
+    put(25, "RULE-SET,https://anti-ad.net/surge.txt,REJECT")
     for r in a_direct:
         put(60, r)
     for r in a_proxy:
@@ -368,6 +374,7 @@ def build():
         desc = next((d for _f, p, d in B_RULESET_ORDER if p == pos), None)
         label = {
             20: "A 的广告拦截（EasyList 系，1.6 万条）",
+            25: "anti-AD 国内 App 埋点/广告（10 万+ 条）",
             60: "A 的直连白名单",
             65: "A 的强制代理名单",
             15: "强制代理覆盖层（A 的白名单里已过时的境外站点）",
@@ -418,6 +425,8 @@ def build():
     fp = [l for l in rule_lines if l.startswith("DOMAIN-SUFFIX,") and l.endswith(",PROXY")
           and l.split(",")[1] in FORCE_PROXY]
     check(len(fp) == len(FORCE_PROXY), f"强制代理覆盖层完整（{len(fp)}/{len(FORCE_PROXY)}）")
+
+    check(any("anti-ad.net" in l for l in rule_lines), "anti-AD 广告规则集已挂载")
 
     raw_refs = [l for l in rule_lines if "raw.githubusercontent.com" in l]
     check(not raw_refs, f"规则集全部走 jsDelivr（残留 raw 引用 {len(raw_refs)} 条）")
