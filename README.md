@@ -11,20 +11,23 @@
 
 ## 订阅地址
 
-**主用 jsDelivr（国内可直连，推荐）：**
+**主用 jsDelivr `@latest`（国内可直连，已验证）**：
 
 ```
-https://cdn.jsdelivr.net/gh/beifang35/shadowrocket-config@main/shadowrocket.conf
+https://cdn.jsdelivr.net/gh/beifang35/shadowrocket-config@latest/shadowrocket.conf
 ```
 
-**备用 raw（需能访问 GitHub）：**
+**备用 raw（需能访问 GitHub，CDN 有几小时缓存延迟）**：
 
 ```
 https://raw.githubusercontent.com/beifang35/shadowrocket-config/main/shadowrocket.conf
 ```
 
-> 如果 jsDelivr 拉到的还是旧版本，访问一次下面的地址强制刷缓存：
-> `https://purge.jsdelivr.net/gh/beifang35/shadowrocket-config@main/shadowrocket.conf`
+> ⚠️ **不要用 `@main`**。jsDelivr 对分支引用缓存 12 小时，改了也拉不到新版。
+> `@latest` 指向最新 tag，每次发布都会打新 tag，能立刻解析到新内容。
+>
+> 如果 `@latest` 拉到的还是旧版本，访问一次下面的地址强制刷缓存：
+> `https://purge.jsdelivr.net/gh/beifang35/shadowrocket-config@latest/shadowrocket.conf`
 
 ### 使用方法
 
