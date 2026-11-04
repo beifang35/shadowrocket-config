@@ -140,20 +140,16 @@ UNBREAK_DIRECT = [
     "DOMAIN,nishub1.10010.com,DIRECT",
 ]
 
-# Apple 列表（pos 10）之前的 Apple 自家广告与隐私遥测拦截（pos 9）
-# 原因：ACL4SSR Apple.list 含 DOMAIN-SUFFIX,apple.com / icloud.com / mzstatic.com,DIRECT，
-# 若不前置拦截，iAd 广告 SDK 与 Apple 统计遥测会被 Apple.list 提前放行。
+# Apple 列表（pos 10）之前的 Apple 广告与崩溃分析拦截（pos 9）
+# 原因：ACL4SSR Apple.list 含 DOMAIN-SUFFIX,apple.com,DIRECT，需前置拦截纯广告与图书/天气/备忘录事件上报。
+# 注意：严格排除 xp.apple.com（Apple 官方列于软件更新网络要求 HT210060）及 metrics.icloud.com 等诊断接口，避免影响系统更新与诊断。
 APPLE_TELEMETRY_REJECT = [
     "crashlytics.com",
     "iadsdk.apple.com",
     "api-adservices.apple.com",
-    "metrics.icloud.com",
-    "metrics.mzstatic.com",
     "books-analytics-events.apple.com",
     "weather-analytics-events.apple.com",
     "notes-analytics-events.apple.com",
-    "xp.apple.com",
-    "supportmetrics.apple.com",
 ]
 
 # WebRTC STUN 公网 IP 探测服务器拦截（pos 9，防止 WebRTC 穿透暴露公网或节点 IP）
@@ -198,11 +194,14 @@ PRE_UNBAN_OVERRIDES = [
     "DOMAIN-SUFFIX,beizi.biz,REJECT",
 ]
 
-# 额外拦截：Loyalsoldier / anti-AD 未收录的海外广告、追踪、挖矿、遥测、邮件追踪像素及用户指定拦截项（pos 26）
-# 注：严格排除 apis.google.com / t.co / redditmedia.com / vimeocdn.com / mailchimp.com 主站等正常业务域名
+# 额外拦截：Loyalsoldier / anti-AD 未收录的纯广告、纯事件上报端点、网页挖矿、邮件追踪像素及用户指定拦截项（pos 26）
+# 兼容性边界（遵循最小误伤原则）：
+# 1. 严禁整域封锁 LaunchDarkly / Split / Flagsmith / ConfigCat（其 clientstream/clientsdk/cdn 子域用于正常网页功能开关，仅封锁 events.* 纯上报子域）
+# 2. 严禁封锁 app.link / bnc.lt（Branch 正常 App 深度跳转链接）及 OneTrust / CookieLaw（阻止会导致部分海外网站卡在遮罩层）
+# 3. 严禁封锁 apis.google.com / t.co / redditmedia.com / vimeocdn.com / mailchimp.com 主站及前端错误 SDK 脚本主域
 EXTRA_REJECT = [
     "2345.com",
-    # Amazon / Google / 视频广告子域
+    # Amazon / Google / 视频纯广告与指标上报子域
     "aax-eu.amazon.com",
     "device-metrics-us.amazon.com",
     "unagi-na.amazon.com",
@@ -211,20 +210,14 @@ EXTRA_REJECT = [
     "plus.google.com",
     "pagead2.googlevideo.com",
     "bcvp0rtal.com",
-    "api.bcovlive.io",
     "ad.dm.gg",
     "ads.dailymotion.com",
     "video-ads.twitter.com",
-    # 统计分析 / 归因追踪 / 错误监控遥测
+    # 纯统计分析与纯事件上报子域（不封锁功能配置主域）
     "metrika.yandex.com",
-    "pendo.io",
-    "app.link",
-    "bnc.lt",
     "snap.licdn.com",
-    "cdn.ravenjs.com",
-    "raygun.io",
-    "honeybadger.io",
-    "trackjs.com",
+    "events.launchdarkly.com",
+    "events.split.io",
     # 网页加密货币挖矿（Cryptojacking）
     "coinhive-proxy.com",
     "coin-hive-proxy.com",
@@ -234,28 +227,10 @@ EXTRA_REJECT = [
     "fastpool.xyz",
     "minergate.com",
     "cpu.js.org",
-    # OEM 系统与浏览器广告遥测
+    # OEM 系统与浏览器纯广告遥测子域
     "settings-win.data.microsoft.com",
     "ads-mas-us.vivobrowser.com",
     "ads-mas.vivobrowser.com",
-    # Cookie 追踪与同意管理弹窗（CMP）
-    "cookielaw.org",
-    "onetrust.com",
-    "onetrust.io",
-    "privacy-mgmt.com",
-    "wrapper-api.sp-prod.net",
-    "trustarc.com",
-    "didomi.io",
-    # 联盟营销与 A/B 测试追踪 SDK
-    "tqlkg.com",
-    "shrsl.com",
-    "impact.com",
-    "split.io",
-    "launchdarkly.com",
-    "vwo.com",
-    "abtest.ai",
-    "flagsmith.com",
-    "configcat.com",
     # 邮件打开率/点击追踪像素子域（保留 mailchimp.com / sendgrid.net 等主站不拦）
     "pixel.mailchimp.com",
     "open.convertkit.com",

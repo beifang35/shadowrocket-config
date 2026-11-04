@@ -381,15 +381,20 @@ CASES = [
     ("futu.cn",                  PROXY,  "富途牛牛（被墙 .cn）"),
     ("longbridge.cn",            PROXY,  "长桥证券（被墙 .cn）"),
     ("bloomberg.cn",             PROXY,  "彭博中文（被墙 .cn）"),
+    ("clientstream.launchdarkly.com", PROXY, "LaunchDarkly 功能配置流（防误杀）"),
+    ("clientsdk.launchdarkly.com",    PROXY, "LaunchDarkly 客户端配置（防误杀）"),
+    ("sdk.split.io",             PROXY,  "Split 功能开关 SDK（防误杀）"),
+    ("app.link",                 PROXY,  "Branch 深度跳转链接（防误杀）"),
 
-    # ---- Apple：必须直连（否则 App Store / iCloud 挂）----
+    # ---- Apple：必须直连（否则 App Store / iCloud / 系统更新挂）----
     ("apple.com",        DIRECT, "Apple"),
     ("www.apple.com",    DIRECT, "Apple"),
     ("icloud.com",       DIRECT, "Apple"),
     ("mzstatic.com",     DIRECT, "Apple CDN"),
     ("apps.apple.com",   DIRECT, "App Store"),
+    ("xp.apple.com",     DIRECT, "Apple 软件更新配置（HT210060 保活）"),
 
-    # ---- 广告：必须拦截 ----
+    # ---- 广告与纯遥测：必须拦截 ----
     ("doubleclick.net",          "REJECT", "Google 广告"),
     ("google-analytics.com",     "REJECT", "Google 统计"),
     ("googlesyndication.com",    "REJECT", "Google 广告联盟"),
@@ -409,9 +414,10 @@ CASES = [
     ("crashlytics.com",          "REJECT", "Crashlytics 统计"),
     ("iadsdk.apple.com",         "REJECT", "Apple iAd 广告 SDK"),
     ("api-adservices.apple.com", "REJECT", "Apple AdServices 广告"),
-    ("metrics.icloud.com",       "REJECT", "Apple iCloud 遥测"),
-    ("stun.l.google.com",        "REJECT", "WebRTC STUN 防公网 IP 泄漏"),
-    ("stun.cloudflare.com",      "REJECT", "WebRTC STUN 防公网 IP 泄漏"),
+    ("events.launchdarkly.com",  "REJECT", "LaunchDarkly 纯事件上报子域"),
+    ("events.split.io",          "REJECT", "Split 纯事件上报子域"),
+    ("stun.l.google.com",        "REJECT", "WebRTC STUN 辅助拦截"),
+    ("stun.cloudflare.com",      "REJECT", "WebRTC STUN 辅助拦截"),
     ("aax-eu.amazon.com",        "REJECT", "Amazon 广告子域"),
     ("pagead2.googlevideo.com",  "REJECT", "YouTube 视频广告"),
     ("coinhive-proxy.com",       "REJECT", "网页挖矿脚本"),

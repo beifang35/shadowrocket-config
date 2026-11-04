@@ -325,7 +325,7 @@ def main():
         "umeng.com", "cnzz.com", "popads.net", "adjust.com", "app.adjust.com",
         "adservice.google.com", "pglstatp-toutiao.com", "xdcs-collector.ximalaya.com",
         "besc.baidustatic.com", "dup.baidustatic.com", "2345.com",
-        "iadsdk.apple.com", "api-adservices.apple.com", "metrics.icloud.com",
+        "iadsdk.apple.com", "api-adservices.apple.com", "events.launchdarkly.com",
         "stun.l.google.com", "stun.cloudflare.com", "aax-eu.amazon.com",
         "pagead2.googlevideo.com", "coinhive-proxy.com", "pixel.mailchimp.com",
     ]
@@ -337,9 +337,9 @@ def main():
         print(f"      {d:<34} {pol:<8} {rule}")
         fails.append(("广告", d, "REJECT", pol, rule))
 
-    # ---------- 3. DNS 泄漏 ----------
+    # ---------- 3. DNS 防泄漏配置检查与 DoH 实时探测 ----------
     print("\n" + "-" * 78)
-    print("③ DNS 泄漏测试")
+    print("③ DNS 防泄漏配置检查与 DoH 实时连通性探测（静态规则 + RFC 8484 Wire 探测）")
     print("-" * 78)
     ip_rules = [r for r in rules if r[0] in IP_TYPES]
     nude = [r for r in ip_rules if not r[3]]
@@ -347,22 +347,60 @@ def main():
     print("  ✓" if not nude else "  ✗")
     for r in nude[:5]:
         print(f"      裸规则: {r[0]},{r[1]},{r[2]}")
+    if nude:
+        fails.append(("DNS", "IP规则no-resolve", "0裸规则", f"{len(nude)}条裸规则", str(nude[0][:3])))
 
     geo = [r for r in rules if r[0] == "GEOIP"]
+    geo_ok = bool(geo) and all(g[3] for g in geo)
     print(f"  GEOIP 规则 {len(geo)} 条，带 no-resolve {sum(1 for g in geo if g[3])} 条", end="")
-    print("  ✓" if geo and all(g[3] for g in geo) else "  ✗")
+    print("  ✓" if geo_ok else "  ✗")
+    if not geo_ok:
+        fails.append(("DNS", "GEOIP带no-resolve", "True", str(geo_ok), "GEOIP"))
 
     leak = [(d, m.match(d)[2]) for d, _ in WHITE if m.match(d)[2] > 0]
-    print(f"  {len(WHITE)} 条流量匹配过程中触发本地 DNS 查询: {len(leak)} 次", end="")
-    print("  ✓（零泄露）" if not leak else "  ✗")
+    print(f"  {len(WHITE)} 条流量静态匹配过程中触发 IP 规则解析: {len(leak)} 次", end="")
+    print("  ✓" if not leak else "  ✗")
     for d, n in leak:
         print(f"      {d} 触发 {n} 次")
+        fails.append(("DNS", d, "0次解析", f"{n}次解析", "静态模拟"))
 
-    dns_ok = gen.get("dns-server", "").startswith("https://")
-    print(f"  dns-server 是否加密: {'是 ✓' if dns_ok else '否 ✗'}")
-    print(f"  proxy-dns-server 是否设置: {'是 ✓' if gen.get('proxy-dns-server') else '否 ✗'}")
+    dns_urls = [u.strip() for u in gen.get("dns-server", "").split(",") if u.strip()]
+    dns_ok = bool(dns_urls) and all(u.startswith("https://") for u in dns_urls)
+    print(f"  dns-server 全部为加密 DoH: {'是 ✓' if dns_ok else '否 ✗'}")
+    if not dns_ok:
+        fails.append(("DNS", "dns-server", "https://...", gen.get("dns-server", ""), "General"))
+
+    proxy_dns_urls = [u.strip() for u in gen.get("proxy-dns-server", "").split(",") if u.strip()]
+    proxy_dns_ok = bool(proxy_dns_urls) and all(u.startswith("https://") for u in proxy_dns_urls)
+    print(f"  proxy-dns-server 已配置加密 DoH: {'是 ✓' if proxy_dns_ok else '否 ✗'}")
+    if not proxy_dns_ok:
+        fails.append(("DNS", "proxy-dns-server", "https://...", gen.get("proxy-dns-server", ""), "General"))
+
+    always_ip_ok = gen.get("always-ip-address") == "false"
     print(f"  always-ip-address: {gen.get('always-ip-address')} "
-          f"{'✓（未强制本地解析）' if gen.get('always-ip-address') != 'true' else '✗'}")
+          f"{'✓（未强制本地解析）' if always_ip_ok else '✗'}")
+    if not always_ip_ok:
+        fails.append(("DNS", "always-ip-address", "false", str(gen.get("always-ip-address")), "General"))
+
+    priv_ip_ok = gen.get("private-ip-answer") == "true"
+    print(f"  private-ip-answer: {gen.get('private-ip-answer')} {'✓' if priv_ip_ok else '✗'}")
+    if not priv_ip_ok:
+        fails.append(("DNS", "private-ip-answer", "true", str(gen.get("private-ip-answer")), "General"))
+
+    # RFC 8484 DoH wire-format 实时探测（查询 baidu.com IN A 记录：27 字节标准报文 base64url）
+    doh_q = "AAABAAABAAAAAAAABWJhaWR1A2NvbQAAAQAB"
+    all_doh = list(dict.fromkeys(dns_urls + [u.strip() for u in gen.get("fallback-dns-server", "").split(",") if u.strip().startswith("https://")]))
+    for u in all_doh:
+        p = subprocess.run(
+            ["curl", "-sS", "--max-time", "8", "-H", "Accept: application/dns-message",
+             "-o", "/dev/null", "-w", "%{http_code}:%{content_type}", f"{u}?dns={doh_q}"],
+            capture_output=True, text=True, check=False,
+        )
+        out_str = p.stdout.strip()
+        ok_doh = out_str.startswith("200:") and "application/dns-message" in out_str.lower()
+        print(f"  DoH 实时探测 {u:<38} -> {out_str or 'ERR'} {'✓' if ok_doh else '✗'}")
+        if not ok_doh:
+            fails.append(("DoH探测", u, "200:application/dns-message", out_str, "RFC8484"))
 
     # ---------- 汇总 ----------
     print("\n" + "=" * 78)
@@ -372,7 +410,7 @@ def main():
             print(f"  [{cat}] {d:<30} 期望 {exp} 实际 {act}  ({rule})")
         return 1
     print("二轮验收全部通过 ✅")
-    print(f"  白名单/分流 {len(WHITE)}/{len(WHITE)} · 广告抽检 1200+{len(classic)} 条全拦截 · DNS 零泄露")
+    print(f"  白名单/分流 {len(WHITE)}/{len(WHITE)} · 广告抽检 1200+{len(classic)} 条全拦截 · DNS配置与DoH探测全通过")
     return 0
 
 
