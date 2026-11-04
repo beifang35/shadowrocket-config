@@ -68,7 +68,8 @@ echo ""
 echo "==> 5/5 清除 jsDelivr 缓存"
 for ref in latest main "v${NEXT:-1.0.0}"; do
   curl -sS -m 20 "https://purge.jsdelivr.net/gh/beifang35/shadowrocket-config@${ref}/shadowrocket.conf" >/dev/null \
-    && echo "    已清 @${ref}" || echo "    清 @${ref} 失败（不影响 raw，重启后自然过期）"
+    && echo "    已清 @${ref} (shadowrocket.conf)" || echo "    清 @${ref} 失败（不影响 Pages）"
+  curl -sS -m 20 "https://purge.jsdelivr.net/gh/beifang35/shadowrocket-config@${ref}/rules/anti-ad.txt" >/dev/null || true
 done
 
 # GitHub Pages：push 到 main 后自动重建，1-2 分钟生效，没有 jsDelivr 那套 12 小时分支缓存

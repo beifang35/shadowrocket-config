@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 拉取上游并重新合并（内置 13 项校验，不通过会直接失败）
+      - name: 拉取上游并重新合并（内置 16 项校验，不通过会直接失败）
         run: python3 merge.py
 
       - name: 同步产物到仓库根目录
@@ -58,3 +58,4 @@ jobs:
       - name: 清 jsDelivr 缓存
         run: |
           curl -sS -m 20 "https://purge.jsdelivr.net/gh/beifang35/shadowrocket-config@latest/shadowrocket.conf" || true
+          curl -sS -m 20 "https://purge.jsdelivr.net/gh/beifang35/shadowrocket-config@latest/rules/anti-ad.txt" || true

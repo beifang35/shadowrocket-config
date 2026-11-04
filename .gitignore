@@ -2,3 +2,6 @@ out/
 *.tmp
 .DS_Store
 __pycache__/
+HANDOFF.md
+docs/
+evidence/
