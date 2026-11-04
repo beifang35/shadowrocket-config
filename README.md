@@ -144,6 +144,46 @@ A 已停止维护，规则停留在 2021 年；B 仍在更新，实际跟进的�
 
 ---
 
+## 强制代理覆盖层（40 个域名）
+
+A 是 2021 年的配置，它把一批境外站点判成「可直连」。用 GFWList（4062 条被墙域名）交叉比对后，
+发现 **37 个命中**——按 A 原样走直连会直接打不开：
+
+```
+github.com/github.io/githubusercontent.com    ← 本机 vault 的 git 同步依赖它
+speedtest.net                                 ← 判直连会导致测速测的是本地带宽
+linkedin.com  spotify.com  imgur.com  naver.com  daum.net  yahoo.com
+9gag.com  behance.net  canva.com  deviantart.com  etsy.com  feedly.com
+forbes.com  godaddy.com  goodreads.com  mega.nz  nicovideo.jp  dmm.co.jp
+ameblo.jp  namu.wiki  pandora.com  roblox.com  rutracker.org  wikia.org
+theguardian.com  washingtonpost.com  weebly.com  xfinity.com  youporn.com
+bet365.com  avg.com  hola.com  homedepot.com  huffingtonpost.com  flipkart.com
+```
+
+合并时插在 A 的 Direct 白名单**之前**（`merge.py` 里 `put(15, ...)`），压住 A 的判断。
+想关掉某一项：从 `merge.py` 的 `FORCE_PROXY` 里删掉那行，重跑 `./publish.sh`。
+
+---
+
+## 验收方法
+
+配置当代码测，不靠人工点几下：
+
+```bash
+python3 verify.py        # 46 条断言 + GFWList/国内域名全量扫描 + 10 项结构检查
+```
+
+`verify.py` 实现的是小火箭的真实语义：
+
+- **首条匹配生效**（first-match-wins）
+- **`no-resolve` 对域名请求跳过 IP 类规则**，不触发本地 DNS 查询
+- 反向：**没带 `no-resolve` 的 IP 规则会让每个域名都本地解析一次**，这是 DNS 泄露的唯一技术成因
+
+它会给每条测试流量打出「最终策略」和「匹配过程中触发了几次本地 DNS 查询」。
+理想结果是 **0 次**——一旦 >0，泄露就已经发生，后面匹配到什么都救不回来。
+
+---
+
 ## 已知取舍
 
 1. **A 的 124 条 IP 段规则统一补了 `no-resolve`**
