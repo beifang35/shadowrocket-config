@@ -1,0 +1,60 @@
+name: auto-update
+
+# 上游一变，GitHub 自己重新编译并发布，不需要你的电脑开机
+on:
+  schedule:
+    # 每天 03:00 UTC = 北京时间 11:00
+    - cron: '0 3 * * *'
+  workflow_dispatch:        # 也能在 Actions 页面手动点一下立刻跑
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 拉取上游并重新合并（内置 13 项校验，不通过会直接失败）
+        run: python3 merge.py
+
+      - name: 同步产物到仓库根目录
+        run: cp out/shadowrocket.conf ./shadowrocket.conf
+
+      - name: 有变化才提交并推送
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "上游无变化，跳过"
+            exit 0
+          fi
+          git commit -m "chore: 自动更新 $(date -u '+%Y-%m-%d %H:%M UTC')"
+
+          # 打新 tag，让 jsDelivr 的 @latest 能解析到最新内容
+          LAST=$(git tag -l 'v*' | sed 's/^v//' | sort -V | tail -1)
+          if [ -z "$LAST" ]; then
+            NEXT="1.0.0"
+          else
+            MAJOR=$(echo "$LAST" | cut -d. -f1)
+            MINOR=$(echo "$LAST" | cut -d. -f2)
+            PATCH=$(echo "$LAST" | cut -d. -f3)
+            NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+          git tag -f "v${NEXT}"
+
+          git push origin main
+          git push -f origin "v${NEXT}"
+          echo "已发布 v${NEXT}"
+
+      - name: 清 jsDelivr 缓存
+        run: |
+          curl -sS -m 20 "https://purge.jsdelivr.net/gh/beifang35/shadowrocket-config@latest/shadowrocket.conf" || true
