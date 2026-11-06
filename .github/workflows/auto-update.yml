@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 拉取上游并重新合并（内置 16 项校验，不通过会直接失败）
+      - name: 拉取上游并重新合并（内置发布闸门校验，不通过会直接失败）
         run: python3 merge.py
 
       - name: 验收器负例回归与完整静态验收（失败禁止发布）

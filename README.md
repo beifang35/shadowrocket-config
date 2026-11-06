@@ -10,7 +10,7 @@
 |---|---|
 | [shadowrocket.conf](shadowrocket.conf) | 合并配置（内联规则 + 14 个远程规则集；展开数量随上游更新变化） |
 | [rules/anti-ad.txt](rules/anti-ad.txt) | 预清洗的 `DOMAIN-SET` 广告域名集（anti-AD ∪ Johnshall Reject，108,722 条唯一域名） |
-| [merge.py](merge.py) | 合并编译器：拉取 4 路上游 → 规则去重与误杀清洗 → 按优先级分层 → 16 项发布闸门校验 |
+| [merge.py](merge.py) | 合并编译器：拉取 4 路上游 → 规则去重与误杀清洗 → 按优先级分层 → 发布闸门校验（含 DNS 端口保护，当前 20 项） |
 | [verify.py](verify.py) | 静态深度验收：结构、分流与兼容断言，GFWList 与国内域名表全量扫描；取源失败、空规则与空扫描均阻断发布 |
 | [verify_live.py](verify_live.py) | 数据库配置快照或编译产物（`--conf`）的静态验收，加主/节点/回退 DoH 报文和解析结果探测 |
 | [verify_support.py](verify_support.py) | 共用取源、规则格式、关键兼容用例与 DNS wire response 校验 |
@@ -21,7 +21,7 @@
 ## 30 秒上手
 
 ```bash
-# 1. 拉取上游并重新编译（内置 16 项闸门校验）
+# 1. 拉取上游并重新编译（内置发布闸门校验，不通过不写文件）
 python3 merge.py
 
 # 2. 运行负例回归、全量静态验收与 DoH 探测
