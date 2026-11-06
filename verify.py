@@ -8,7 +8,7 @@ Shadowrocket 配置验收器
 （含 pre-matching 预匹配层 + 首条匹配生效 + no-resolve 跳过本地 DNS 解析）
 模拟每条流量的判定，并统计匹配过程中**触发了几次本地 DNS 查询**。
 
-同时对 GFWList（4062 条被墙域名）做 100% 穷举扫描：**0 条被判成 DIRECT 才算通过**。
+同时对当次拉取的 GFWList 做全量扫描：0 条被判成 DIRECT 才算通过。
 
 用法：
   python3 verify.py                 # 完整验收
@@ -19,10 +19,12 @@ import argparse
 import base64
 import ipaddress
 import re
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from verify_support import (COMPATIBILITY_CASES, dns_checks, fetch_text,
+                            parse_source, require_items)
 
 BASE = Path(__file__).resolve().parent
 CONF = (BASE / "out" / "shadowrocket.conf") if (BASE / "out" / "shadowrocket.conf").exists() else (BASE / "shadowrocket.conf")
@@ -32,14 +34,7 @@ IP_RULE_TYPES = {"IP-CIDR", "IP-CIDR6", "GEOIP"}
 
 # ------------------------------------------------------------------ 取数据
 def curl(url: str, timeout=40) -> str:
-    # 若是本仓托管的 anti-ad.txt 且本地已生成，优先读取本地最新构建版本以验证当前改动
-    if url.endswith("/rules/anti-ad.txt") and (BASE / "rules" / "anti-ad.txt").exists():
-        return (BASE / "rules" / "anti-ad.txt").read_text(encoding="utf-8")
-    p = subprocess.run(["curl", "-sSL", "--max-time", str(timeout), url],
-                       capture_output=True, check=False)
-    if p.returncode != 0:
-        raise RuntimeError(f"拉取失败 {url}: {p.stderr.decode(errors='replace')[:100]}")
-    return p.stdout.decode("utf-8", errors="replace")
+    return fetch_text(url, BASE, timeout, source_mode="build")
 
 
 # ------------------------------------------------------------------ 规则模型
@@ -70,6 +65,8 @@ def parse_rule(line: str, source: str = "conf") -> Rule | None:
     if not parts or not parts[0]:
         return None
     rtype = parts[0].upper()
+    if rtype == "DST-PORT":
+        rtype = "DEST-PORT"
 
     if rtype in ("RULE-SET", "DOMAIN-SET"):
         return None                      # 由调用方展开
@@ -120,61 +117,22 @@ def load_conf(path: Path):
     return general, rules, rulesets, others
 
 
-SUPPORTED_TYPES = {
-    "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6",
-    "GEOIP", "USER-AGENT", "URL-REGEX", "FINAL", "RULE-SET", "DOMAIN-SET",
-}
-
-
 def expand_ruleset(line: str, stats: dict) -> list[Rule]:
     parts = [p.strip() for p in line.split(",")]
     url, policy = parts[1], parts[2].upper()
     pre_matching = any(p.lower() == "pre-matching" for p in parts[3:])
 
-    if parts[0].upper() == "DOMAIN-SET":
-        try:
-            body = curl(url)
-        except Exception as e:                               # noqa: BLE001
-            stats.setdefault("failed", []).append((url, str(e)))
-            return []
-        out = []
-        for ln in body.splitlines():
-            t = ln.strip()
-            if not t or t.startswith("#"):
-                continue
-            if t.startswith("."):
-                out.append(Rule(t, "DOMAIN-SUFFIX", t[1:], policy, True, pre_matching, url.split("/")[-1]))
-            else:
-                out.append(Rule(t, "DOMAIN", t, policy, True, pre_matching, url.split("/")[-1]))
-        stats.setdefault("sets", []).append(
-            {"file": url.split("/")[-1], "count": len(out), "unsupported": [], "url": url})
-        return out
-
     try:
-        body = curl(url)
+        parsed = parse_source(curl(url), parts[0].upper(), url)
     except Exception as e:                                   # noqa: BLE001
         stats.setdefault("failed", []).append((url, str(e)))
         return []
 
-    out, unsupported = [], set()
-    for ln in body.splitlines():
-        s = ln.strip()
-        if not s or s.startswith("#") or s.startswith("//"):
-            continue
-        p = [x.strip() for x in s.split(",")]
-        t = p[0].upper()
-        if t not in SUPPORTED_TYPES:
-            unsupported.add(t)
-            continue
-        if t in IP_RULE_TYPES:
-            nr = any(x.lower() == "no-resolve" for x in p[1:])
-            out.append(Rule(s, t, p[1] if len(p) > 1 else "", policy, nr, pre_matching, url.split("/")[-1]))
-        else:
-            out.append(Rule(s, t, p[1] if len(p) > 1 else "", policy, False, pre_matching, url.split("/")[-1]))
-
+    out = [Rule(f"{t},{value},{policy}", t, value, policy, nr, pre_matching, url.split("/")[-1])
+           for t, value, nr in parsed]
     stats.setdefault("sets", []).append({
         "file": url.split("/")[-1], "count": len(out),
-        "unsupported": sorted(unsupported), "url": url,
+        "unsupported": [], "url": url,
     })
     return out
 
@@ -212,7 +170,7 @@ class Matcher:
             return False
         return any(a in n for n in self.cn_nets)
 
-    def match(self, target: str) -> MatchResult:
+    def match(self, target: str, port: int | None = None) -> MatchResult:
         is_ip = False
         try:
             ipaddress.ip_address(target)
@@ -228,6 +186,8 @@ class Matcher:
 
             if r.rtype == "DOMAIN":
                 hit = (not is_ip) and target.lower() == r.value.lower()
+            elif r.rtype == "DEST-PORT":
+                hit = port is not None and r.value == str(port)
             elif r.rtype == "DOMAIN-SUFFIX":
                 t, v = target.lower(), r.value.lower()
                 hit = (not is_ip) and (t == v or t.endswith("." + v))
@@ -307,6 +267,7 @@ PROXY = "PROXY"
 REJECT = {"REJECT", "REJECT-TINYGIF", "REJECT-DROP"}
 
 CASES = [
+    ("ubmcvideo.baidustatic.com", "REJECT", "百度视频广告先于静态 CDN 白名单拒绝"),
     # ---- 国内大站：必须直连，且匹配过程零本地解析 ----
     ("baidu.com",        DIRECT, "国内大站"),
     ("www.baidu.com",    DIRECT, "国内大站子域"),
@@ -381,10 +342,7 @@ CASES = [
     ("futu.cn",                  PROXY,  "富途牛牛（被墙 .cn）"),
     ("longbridge.cn",            PROXY,  "长桥证券（被墙 .cn）"),
     ("bloomberg.cn",             PROXY,  "彭博中文（被墙 .cn）"),
-    ("clientstream.launchdarkly.com", PROXY, "LaunchDarkly 功能配置流（防误杀）"),
-    ("clientsdk.launchdarkly.com",    PROXY, "LaunchDarkly 客户端配置（防误杀）"),
-    ("sdk.split.io",             PROXY,  "Split 功能开关 SDK（防误杀）"),
-    ("app.link",                 PROXY,  "Branch 深度跳转链接（防误杀）"),
+    *COMPATIBILITY_CASES,
 
     # ---- Apple：必须直连（否则 App Store / iCloud / 系统更新挂）----
     ("apple.com",        DIRECT, "Apple"),
@@ -392,7 +350,6 @@ CASES = [
     ("icloud.com",       DIRECT, "Apple"),
     ("mzstatic.com",     DIRECT, "Apple CDN"),
     ("apps.apple.com",   DIRECT, "App Store"),
-    ("xp.apple.com",     DIRECT, "Apple 软件更新配置（HT210060 保活）"),
 
     # ---- 广告与纯遥测：必须拦截 ----
     ("doubleclick.net",          "REJECT", "Google 广告"),
@@ -504,16 +461,18 @@ def main():
     ck(bool(geo) and geo[0].no_resolve, "GEOIP 带 no-resolve")
     nude = [r for r in full if r.rtype in IP_RULE_TYPES and not r.no_resolve]
     ck(not nude, f"所有 IP 类规则带 no-resolve（裸规则 {len(nude)} 条）")
-    ck(general.get("dns-server", "").startswith("https"), "dns-server 为加密 DoH")
-    ck("proxy-dns-server" in general, "proxy-dns-server 已配置")
+    for ok, description in dns_checks(general):
+        ck(ok, description)
     ck(general.get("always-ip-address", "false").lower() != "true", "未强制本地解析（always-ip-address）")
     ck(general.get("private-ip-answer", "true").lower() == "true", "private-ip-answer = true")
-    ck("system" not in general.get("dns-server", "").split(",")[0], "dns-server 首项不是 system")
     ck(not stats.get("failed"), f"远程规则集全部可达（失败 {len(stats.get('failed', []))} 个）")
 
     # ---- 匹配断言 ----
     print(f"\n[匹配断言] {len(CASES)} 条流量")
     m = Matcher(full)
+    for server in ("223.5.5.5", "119.29.29.29", "8.8.8.8"):
+        result = m.match(server, port=53)
+        ck(result.policy == "PROXY", f"DNS 端口静态匹配 {server}:53 → PROXY")
     fails, leaks = [], []
     print(f"  {'域名/IP':<28}{'期望':<8}{'实际':<10}{'本地DNS':<8}判定")
     print("  " + "-" * 70)
@@ -541,7 +500,7 @@ def main():
     # 1) GFWList 里的被墙域名，绝不允许判成 DIRECT（判直连 = 打不开，必须 0 漏网）
     try:
         raw = curl("https://cdn.jsdelivr.net/gh/gfwlist/gfwlist@master/gfwlist.txt")
-        txt = base64.b64decode(raw.strip()).decode("utf-8", errors="replace")
+        txt = base64.b64decode("".join(raw.split()), validate=True).decode("utf-8", errors="strict")
         gfw = set()
         for ln in txt.splitlines():
             t = ln.strip()
@@ -551,6 +510,7 @@ def main():
             m_dom = re.match(r"[a-z0-9][a-z0-9\-\.]{2,80}\.[a-z]{2,12}", t, re.I)
             if m_dom:
                 gfw.add(m_dom.group(0).lower())
+        require_items(gfw, "GFWList 扫描")
         bad = []
         for d in sorted(gfw):
             pol, _rule = fm.match(d)
@@ -567,7 +527,8 @@ def main():
         else:
             print("  ✓（0 漏网：全部走代理或拦截，绝不直连撞墙）")
     except Exception as e:                                    # noqa: BLE001
-        print(f"  被墙域名扫描跳过：{e}")
+        print(f"  被墙域名扫描失败：{e}")
+        scan_fail += 1
 
     # 2) 国内常用域名扫描
     try:
@@ -577,14 +538,16 @@ def main():
             m_cn = re.match(r"server=/([^/]+)/", ln.strip())
             if m_cn:
                 cn.add(m_cn.group(1).lower())
+        require_items(cn, "国内域名扫描")
         bad = []
         for d in cn:
             pol, _rule = fm.match(d)
             if pol.upper() in REJECT:
                 bad.append((d, _rule))
-        print(f"  国内域名清单 {len(cn)} 条 → 被判拦截 {len(bad)} 条  ✓（已排除公共 CDN 与运营商认证误杀）")
+        print(f"  国内域名清单 {len(cn)} 条 → 命中拦截 {len(bad)} 条（含广告/遥测，仅统计；保活由核心断言验收）")
     except Exception as e:                                    # noqa: BLE001
-        print(f"  国内域名扫描跳过：{e}")
+        print(f"  国内域名扫描失败：{e}")
+        scan_fail += 1
 
     # ---- 汇总 ----
     print("\n" + "=" * 74)
@@ -603,9 +566,9 @@ def main():
 
     if scan_fail > 0:
         verdict = False
-        print(f"\n✗ GFWList 被墙域名扫描存在 {scan_fail} 条被误判为直连（DIRECT）")
+        print(f"\n✗ 全量扫描存在 {scan_fail} 项失败（包含取源/空扫描失败与误判直连）")
     else:
-        print("✓ GFWList 全量 4062 条被墙域名 0 条误判直连")
+        print(f"✓ GFWList 全量 {len(gfw)} 条被墙域名 0 条误判直连；国内域名表读取有效")
 
     if leaks:
         verdict = False
@@ -613,7 +576,7 @@ def main():
         for t, n, rule in leaks:
             print(f"    {t:<28} 触发 {n} 次  规则: {rule}")
     else:
-        print("✓ 全部流量在匹配阶段零本地 DNS 查询 —— 境外域名不会被本地解析")
+        print("✓ 核心断言在静态匹配模拟中零解析触发（实际 DNS 出口需流量抓包验收）")
 
     print(f"\n结构检查 {sum(1 for c, _ in checks if c)}/{len(checks)} 通过")
     print(f"规则集 {len(rulesets)} 个 · 展开后 {len(full)} 条")

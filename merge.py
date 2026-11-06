@@ -87,6 +87,9 @@ tun-excluded-routes = 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 17
 # ---- DNS 段（B 的核心，A 的明文/旧配置已被替换）----
 dns-server = https://dns.alidns.com/dns-query, https://doh.pub/dns-query, https://223.5.5.5/dns-query
 proxy-dns-server = https://dns.alidns.com/dns-query, https://doh.pub/dns-query
+# 接管进入 TUN 的硬编码 DNS，避免国内 DNS IP 命中 DIRECT 后明文发出。
+# 原生通配语法是 *:53；不覆盖绕过 TUN 的局域网或系统例外流量。
+hijack-dns = *:53
 # 保险丝：所有加密 DNS 都不通、网络全断时，把下面这行改成 system 立刻恢复
 fallback-dns-server = https://1.12.12.12/dns-query
 
@@ -113,6 +116,7 @@ PRE_UNBREAK_REJECT = [
     "DOMAIN-SUFFIX,besc.baidustatic.com,REJECT",
     "DOMAIN-SUFFIX,dup.baidustatic.com,REJECT",
     "DOMAIN-SUFFIX,ubmcmm.baidustatic.com,REJECT",
+    "DOMAIN-SUFFIX,ubmcvideo.baidustatic.com,REJECT",
     "DOMAIN-SUFFIX,cpro.baidustatic.com,REJECT",
     "DOMAIN-SUFFIX,pos.baidu.com,REJECT",
 ]
@@ -299,7 +303,7 @@ def fetch(url: str) -> str:
     for i in range(RETRY):
         try:
             p = subprocess.run(
-                ["curl", "-sSL", "--max-time", str(TIMEOUT),
+                ["curl", "--fail", "-sSL", "--max-time", str(TIMEOUT),
                  "-A", "sr-merge/1.2", url],
                 capture_output=True, check=False,
             )
@@ -496,6 +500,9 @@ def build():
     def put(pos: int, line: str):
         buckets.setdefault(pos, []).append(line)
 
+    # TCP 53 不由 UDP DNS 劫持覆盖；进入 TUN 的 DNS 端口先走代理，避免国内 IP 直连。
+    put(4, "DEST-PORT,53,PROXY")
+
     # pos 5: 用户自定义最高优先级放行名单
     for d in EXEMPT:
         put(5, f"DOMAIN-SUFFIX,{d},DIRECT")
@@ -543,7 +550,11 @@ def build():
             if d not in protected_domains:
                 anti_set.add(d)
 
-    # 将 Johnshall 的 5.2 万条广告域名也并入 anti-ad.txt 索引集，确保 100% 覆盖 Johnshall 上游更新
+    # 每个源独立检查；不能让 Johnshall 的数量掩盖 anti-AD 返回错误页或空规则。
+    if len(anti_set) < 50000:
+        raise RuntimeError(f"anti-AD 独立广告源条数异常（{len(anti_set)}）")
+
+    # 将 Johnshall 的广告域名也并入 anti-ad.txt 索引集。
     for d in a_reject_domains:
         if d not in protected_domains:
             anti_set.add(d)
@@ -553,9 +564,7 @@ def build():
 
     anti_domains_sorted = ["." + d for d in sorted(anti_set)]
     anti_txt_content = "\n".join(anti_domains_sorted) + "\n"
-    RULES_DIR.mkdir(parents=True, exist_ok=True)
-    (RULES_DIR / "anti-ad.txt").write_text(anti_txt_content, encoding="utf-8")
-    say(f"[生成] rules/anti-ad.txt  {len(anti_domains_sorted)} 条（anti-AD ∪ Johnshall，DOMAIN-SET 格式）")
+    say(f"[准备] rules/anti-ad.txt  {len(anti_domains_sorted)} 条（通过闸门后写入）")
     put(27, "DOMAIN-SET,https://beifang35.github.io/shadowrocket-config/rules/anti-ad.txt,REJECT")
 
     # pos 20: 内联广告规则（保留 h2y EasyList 规则，剔除白名单保护项）
@@ -647,6 +656,7 @@ def build():
     for pos in sorted(buckets):
         desc = next((d for _f, p, d in B_RULESET_ORDER if p == pos), None)
         label = {
+            4: "DNS 端口保护（进入 TUN 的 53 端口先走代理）",
             5: "放行名单（最高优先级，压过所有规则）",
             7: "百度联盟广告子域精确拦截（早于 baidustatic 主域放行）",
             8: "国内公共静态 CDN 与运营商一键登录防误杀保活",
@@ -703,6 +713,11 @@ def build():
           "没有 dns-server = system")
     check(any(l.startswith("dns-server") and "https://" in l for l in active), "DNS 走加密 DoH")
     check(any(l.startswith("proxy-dns-server") for l in active), "节点域名单独走加密 DNS")
+    check("hijack-dns = *:53" in active, "进入 TUN 的硬编码 DNS 使用原生 53 端口接管")
+    check(rule_lines[0] == "DEST-PORT,53,PROXY", "DNS 端口保护先于域名和国内 IP 直连规则")
+    check(rule_lines.index("DOMAIN-SUFFIX,ubmcvideo.baidustatic.com,REJECT") <
+          rule_lines.index("DOMAIN-SUFFIX,baidustatic.com,DIRECT"),
+          "百度视频广告子域先于静态 CDN 白名单拒绝")
 
     # 检查 UnBan.list 必须位于所有 DOMAIN-SET 与 BanAD.list 之前
     idx_unban = next((i for i, l in enumerate(rule_lines) if "UnBan.list" in l), 999999)
@@ -740,6 +755,10 @@ def build():
 
     if ok:
         OUT_DIR.mkdir(parents=True, exist_ok=True)
+        RULES_DIR.mkdir(parents=True, exist_ok=True)
+        anti_tmp = (RULES_DIR / "anti-ad.txt").with_suffix(".tmp")
+        anti_tmp.write_text(anti_txt_content, encoding="utf-8")
+        anti_tmp.replace(RULES_DIR / "anti-ad.txt")
         tmp = MERGED.with_suffix(".tmp")
         tmp.write_text(merged, encoding="utf-8")
         tmp.replace(MERGED)
@@ -771,6 +790,11 @@ def check_only():
         fails.append("FINAL 数量异常")
     if "no-resolve" not in txt:
         fails.append("缺少 no-resolve")
+    active = {line.strip() for line in txt.splitlines() if line.strip() and not line.lstrip().startswith("#")}
+    if "hijack-dns = *:53" not in active:
+        fails.append("缺少硬编码 DNS 接管")
+    if "DEST-PORT,53,PROXY" not in active:
+        fails.append("缺少 DNS 端口代理保护")
     print("校验通过" if not fails else "校验失败: " + "; ".join(fails))
     return 0 if not fails else 1
 

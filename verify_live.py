@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-二轮实时验收 —— 直接读小火箭「实际生效」的数据库（或最新编译配置）
+数据库/配置静态验收 + 验收进程发起的 DoH 探测（不证明客户端实际流量）
 数据源：~/Library/Containers/com.liguangming.Shadowrocket/Data/Documents/Databases/shadowrocket.db
 """
 
@@ -10,9 +10,12 @@ import ipaddress
 import random
 import re
 import sqlite3
-import subprocess
 import sys
 from pathlib import Path
+
+from verify_support import (COMPATIBILITY_CASES, dns_checks, dns_servers,
+                            fetch_text, parse_source, probe_doh, require_items,
+                            secure_doh_url)
 
 BASE = Path(__file__).resolve().parent
 DB = Path.home() / "Library/Containers/com.liguangming.Shadowrocket/Data/Documents/Databases/shadowrocket.db"
@@ -23,20 +26,16 @@ IP_TYPES = {"IP-CIDR", "IP-CIDR6", "GEOIP"}
 
 
 def curl(url, timeout=60):
-    if url.endswith("/rules/anti-ad.txt") and (BASE / "rules" / "anti-ad.txt").exists():
-        return (BASE / "rules" / "anti-ad.txt").read_text(encoding="utf-8")
-    p = subprocess.run(["curl", "-sSL", "--max-time", str(timeout), url],
-                       capture_output=True, check=False)
-    return p.stdout.decode("utf-8", errors="replace")
+    return fetch_text(url, BASE, timeout, source_mode="remote")
 
 
 def load_db():
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     rows = con.execute(
-        "SELECT rowid,name,value,option,ext FROM config WHERE section='rule' ORDER BY rowid"
+        "SELECT rowid,name,value,option,ext FROM config WHERE lower(section)='rule' ORDER BY rowid"
     ).fetchall()
     gen = {r[0]: r[1] for r in con.execute(
-        "SELECT name,value FROM config WHERE section='general'").fetchall()}
+        "SELECT name,value FROM config WHERE lower(section)='general' ORDER BY rowid").fetchall()}
     con.close()
     return rows, gen
 
@@ -82,38 +81,11 @@ def expand(rows):
         if name == "COMMENT":
             continue
         is_pre = "pre-matching" in (ext or "").lower()
-        if name == "DOMAIN-SET":
-            body = curl(value)
-            n = 0
+        if name in ("DOMAIN-SET", "RULE-SET"):
             src_name = value.split("/")[-1]
-            for ln in body.splitlines():
-                t = ln.strip()
-                if not t or t.startswith("#"):
-                    continue
-                if t.startswith("."):
-                    out.append(("DOMAIN-SUFFIX", t[1:], (option or "").upper(), True, is_pre, src_name))
-                else:
-                    out.append(("DOMAIN", t, (option or "").upper(), True, is_pre, src_name))
-                n += 1
-            print(f"    DOMAIN-SET {src_name:<22} {n:>6} 条  {'[pre-matching]' if is_pre else ''}")
-            continue
-        if name == "RULE-SET":
-            body = curl(value)
-            n = 0
-            src_name = value.split("/")[-1]
-            for ln in body.splitlines():
-                s = ln.strip()
-                if not s or s.startswith("#") or s.startswith("//"):
-                    continue
-                p = [x.strip() for x in s.split(",")]
-                t = p[0].upper()
-                if t not in ("DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD",
-                             "IP-CIDR", "IP-CIDR6", "GEOIP", "URL-REGEX", "USER-AGENT"):
-                    continue
-                nr = any(x.lower() == "no-resolve" for x in p[1:])
-                out.append((t, p[1] if len(p) > 1 else "", (option or "").upper(), nr, is_pre, src_name))
-                n += 1
-            print(f"    RULE-SET   {src_name:<22} {n:>6} 条")
+            parsed = parse_source(curl(value), name, value)
+            out.extend((t, v, (option or "").upper(), nr, is_pre, src_name) for t, v, nr in parsed)
+            print(f"    {name:<10} {src_name:<22} {len(parsed):>6} 条  {'[pre-matching]' if is_pre else ''}")
             continue
         nr = "no-resolve" in (ext or "").lower()
         out.append((name.upper(), value or "", (option or "").upper(), nr, is_pre, "inline"))
@@ -124,7 +96,7 @@ class M:
     def __init__(self, rules):
         # 严格还原小火箭语义：pre-matching 规则排在最前，高于一切常规规则
         ordered = [r for r in rules if r[4]] + [r for r in rules if not r[4]]
-        self.exact, self.suffix, self.kw, self.ip, self.final = {}, {}, [], [], None
+        self.exact, self.suffix, self.kw, self.ip, self.ports, self.final = {}, {}, [], [], [], None
         for i, (t, v, pol, nr, is_pre, src) in enumerate(ordered):
             if t == "DOMAIN":
                 self.exact.setdefault(v.lower(), (i, pol, src))
@@ -132,12 +104,14 @@ class M:
                 self.suffix.setdefault(v.lower(), (i, pol, src))
             elif t == "DOMAIN-KEYWORD":
                 self.kw.append((i, v.lower(), pol, src))
+            elif t in ("DEST-PORT", "DST-PORT"):
+                self.ports.append((i, v, pol))
             elif t in ("IP-CIDR", "IP-CIDR6", "GEOIP"):
                 self.ip.append((i, t, v, pol, nr))
             elif t == "FINAL" and self.final is None:
                 self.final = (i, pol)
 
-    def match(self, target):
+    def match(self, target, port=None):
         try:
             ipaddress.ip_address(target)
             is_ip = True
@@ -178,7 +152,9 @@ class M:
             except ValueError:
                 pass
 
-        cands = [c for c in (best, ip_best) if c]
+        port_best = next(((i, pol, f"DEST-PORT,{v}") for i, v, pol in self.ports
+                          if port is not None and v == str(port)), None)
+        cands = [c for c in (best, ip_best, port_best) if c]
         if cands:
             c = min(cands, key=lambda x: x[0])
             return c[1], c[2], dns_hits
@@ -219,6 +195,7 @@ WHITE = [
     # Apple —— 应直连
     ("apple.com", "DIRECT"), ("icloud.com", "DIRECT"), ("mzstatic.com", "DIRECT"),
     ("apps.apple.com", "DIRECT"),
+    *[(domain, policy) for domain, policy, _ in COMPATIBILITY_CASES],
     # 局域网
     ("192.168.1.1", "DIRECT"), ("10.0.0.1", "DIRECT"),
 ]
@@ -235,7 +212,7 @@ def main():
         print(f"二轮验收 · 数据源 = 编译产物 ({conf_path.name})")
         rows, gen = load_conf_as_rows(conf_path)
     else:
-        print("二轮验收 · 数据源 = 小火箭实际生效的数据库 (shadowrocket.db)")
+        print("二轮验收 · 数据源 = 小火箭数据库配置快照 (shadowrocket.db)")
         rows, gen = load_db()
     print("=" * 78)
 
@@ -246,7 +223,11 @@ def main():
           f"private-ip-answer = {gen.get('private-ip-answer', '?')}")
 
     print(f"\n[展开 RULE-SET / DOMAIN-SET]")
-    rules = expand(rows)
+    try:
+        rules = require_items(expand(rows), "规则链")
+    except Exception as e:
+        print(f"规则集验收失败: {e}")
+        return 1
     print(f"[规则链] 展开后 {len(rules)} 条")
 
     m = M(rules)
@@ -292,15 +273,13 @@ def main():
 
     def sample_from(url, n=600):
         out = []
-        for ln in curl(url).splitlines():
-            t = ln.strip()
-            if not t or t.startswith("#") or t.startswith("!"):
-                continue
-            dom = t[1:] if t.startswith(".") else t
+        for _kind, dom, _nr in parse_source(curl(url), "DOMAIN-SET", url):
             if not is_exempted_by_whitelist(dom):
                 out.append(dom)
+        require_items(out, f"{url} 广告抽样（剔除白名单后）")
         return random.sample(out, min(n, len(out)))
 
+    sampled = 0
     for name, url in [
         ("Loyalsoldier", "https://cdn.jsdelivr.net/gh/Loyalsoldier/surge-rules@release/reject.txt"),
         ("anti-AD∪Johnshall", "https://beifang35.github.io/shadowrocket-config/rules/anti-ad.txt"),
@@ -308,8 +287,10 @@ def main():
         try:
             sample = sample_from(url, 600)
         except Exception as e:                                # noqa: BLE001
-            print(f"  {name} 抽检跳过：{e}")
+            print(f"  {name} 抽检失败：{e}")
+            fails.append(("广告取样", url, "有效非空样本", str(e), name))
             continue
+        sampled += len(sample)
         miss = [d for d in sample if m.match(d)[0] not in REJECT_SET]
         print(f"  {name:<18} 抽检 {len(sample)} 条 → 未拦截 {len(miss)} 条", end="")
         print("  ✓" if not miss else "  ✗")
@@ -364,17 +345,16 @@ def main():
         print(f"      {d} 触发 {n} 次")
         fails.append(("DNS", d, "0次解析", f"{n}次解析", "静态模拟"))
 
-    dns_urls = [u.strip() for u in gen.get("dns-server", "").split(",") if u.strip()]
-    dns_ok = bool(dns_urls) and all(u.startswith("https://") for u in dns_urls)
-    print(f"  dns-server 全部为加密 DoH: {'是 ✓' if dns_ok else '否 ✗'}")
-    if not dns_ok:
-        fails.append(("DNS", "dns-server", "https://...", gen.get("dns-server", ""), "General"))
-
-    proxy_dns_urls = [u.strip() for u in gen.get("proxy-dns-server", "").split(",") if u.strip()]
-    proxy_dns_ok = bool(proxy_dns_urls) and all(u.startswith("https://") for u in proxy_dns_urls)
-    print(f"  proxy-dns-server 已配置加密 DoH: {'是 ✓' if proxy_dns_ok else '否 ✗'}")
-    if not proxy_dns_ok:
-        fails.append(("DNS", "proxy-dns-server", "https://...", gen.get("proxy-dns-server", ""), "General"))
+    for ok, description in dns_checks(gen):
+        print(f"  {description}: {'✓' if ok else '✗'}")
+        if not ok:
+            fails.append(("DNS", description, "通过", "失败", "General"))
+    for server in ("223.5.5.5", "119.29.29.29", "8.8.8.8"):
+        pol, rule, _ = m.match(server, port=53)
+        ok = pol == "PROXY"
+        print(f"  DNS 端口静态匹配 {server}:53 → {pol} {'✓' if ok else '✗'}")
+        if not ok:
+            fails.append(("DNS", server + ":53", "PROXY", pol, rule))
 
     always_ip_ok = gen.get("always-ip-address") == "false"
     print(f"  always-ip-address: {gen.get('always-ip-address')} "
@@ -387,20 +367,18 @@ def main():
     if not priv_ip_ok:
         fails.append(("DNS", "private-ip-answer", "true", str(gen.get("private-ip-answer")), "General"))
 
-    # RFC 8484 DoH wire-format 实时探测（查询 baidu.com IN A 记录：27 字节标准报文 base64url）
-    doh_q = "AAABAAABAAAAAAAABWJhaWR1A2NvbQAAAQAB"
-    all_doh = list(dict.fromkeys(dns_urls + [u.strip() for u in gen.get("fallback-dns-server", "").split(",") if u.strip().startswith("https://")]))
+    # 探测主/节点域名/回退 DNS 的所有唯一 HTTPS 端点，保留并解析完整响应。
+    all_doh = list(dict.fromkeys(u for urls in dns_servers(gen).values()
+                                for u in urls if secure_doh_url(u)))
     for u in all_doh:
-        p = subprocess.run(
-            ["curl", "-sS", "--max-time", "8", "-H", "Accept: application/dns-message",
-             "-o", "/dev/null", "-w", "%{http_code}:%{content_type}", f"{u}?dns={doh_q}"],
-            capture_output=True, text=True, check=False,
-        )
-        out_str = p.stdout.strip()
-        ok_doh = out_str.startswith("200:") and "application/dns-message" in out_str.lower()
+        try:
+            out_str = probe_doh(u)
+            ok_doh = True
+        except Exception as e:
+            out_str, ok_doh = str(e), False
         print(f"  DoH 实时探测 {u:<38} -> {out_str or 'ERR'} {'✓' if ok_doh else '✗'}")
         if not ok_doh:
-            fails.append(("DoH探测", u, "200:application/dns-message", out_str, "RFC8484"))
+            fails.append(("DoH探测", u, "HTTP200 + DNS报文有效 + 目标解析成功", out_str, "RFC8484"))
 
     # ---------- 汇总 ----------
     print("\n" + "=" * 78)
@@ -410,7 +388,8 @@ def main():
             print(f"  [{cat}] {d:<30} 期望 {exp} 实际 {act}  ({rule})")
         return 1
     print("二轮验收全部通过 ✅")
-    print(f"  白名单/分流 {len(WHITE)}/{len(WHITE)} · 广告抽检 1200+{len(classic)} 条全拦截 · DNS配置与DoH探测全通过")
+    print(f"  静态白名单/分流 {len(WHITE)}/{len(WHITE)} · 广告抽检 {sampled}+{len(classic)} 条全拦截 · DNS配置与探测通过")
+    print("  本结果不证明 Shadowrocket 实际 DNS 出口、浏览器指纹或 WebRTC 泄漏；这些需独立流量/浏览器验收。")
     return 0
 
 

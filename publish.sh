@@ -19,6 +19,10 @@ if ! python3 merge.py; then
   exit 1
 fi
 
+echo "==> 验收器负例回归与完整静态验收（失败即停止发布）"
+python3 -m unittest discover -s tests -p 'test_verify*.py'
+python3 verify.py
+
 echo ""
 echo "==> 2/5 同步到仓库根目录"
 cp out/shadowrocket.conf ./shadowrocket.conf
